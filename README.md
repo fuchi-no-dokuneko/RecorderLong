@@ -78,3 +78,7 @@ rescued_hour_YYYYMMDD_HHMMSS_h01.m4a
 
 All PC tools use local ffmpeg, local Python, and local model/filter code. They
 do not upload audio.
+
+## Credits
+
+See [CREDITS.md](CREDITS.md) for Android, FFmpeg, DeepFilterNet, and NumPy attribution.
