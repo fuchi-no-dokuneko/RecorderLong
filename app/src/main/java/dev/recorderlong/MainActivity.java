@@ -26,6 +26,8 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.core.content.ContextCompat;
+
 import java.util.ArrayList;
 import java.util.List;
 
@@ -66,11 +68,7 @@ public class MainActivity extends Activity {
     protected void onStart() {
         super.onStart();
         IntentFilter filter = new IntentFilter(RecordingService.ACTION_STATUS);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(statusReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
-        } else {
-            registerReceiver(statusReceiver, filter);
-        }
+        ContextCompat.registerReceiver(this, statusReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED);
         refreshSettingControls();
         refreshLastStatus();
     }
@@ -287,7 +285,7 @@ public class MainActivity extends Activity {
                 RecordingService.KEY_AUTO_STOP_MINUTES,
                 RecordingService.DEFAULT_AUTO_STOP_MINUTES
         );
-        return clampAutoStopMinutes(minutes);
+        return RecordingPolicy.clampAutoStopMinutes(minutes);
     }
 
     private int saveAutoStopMinutesFromInput() {
@@ -302,19 +300,12 @@ public class MainActivity extends Activity {
                 }
             }
         }
-        minutes = clampAutoStopMinutes(minutes);
+        minutes = RecordingPolicy.clampAutoStopMinutes(minutes);
         preferences.edit().putInt(RecordingService.KEY_AUTO_STOP_MINUTES, minutes).apply();
         if (autoStopMinutesInput != null) {
             autoStopMinutesInput.setText(String.valueOf(minutes));
         }
         return minutes;
-    }
-
-    private int clampAutoStopMinutes(int minutes) {
-        return Math.max(
-                RecordingService.MIN_AUTO_STOP_MINUTES,
-                Math.min(RecordingService.MAX_AUTO_STOP_MINUTES, minutes)
-        );
     }
 
     private void refreshLastStatus() {

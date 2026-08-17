@@ -147,7 +147,7 @@ public class RecordingService extends Service {
 
     private void startNextSegment() {
         int autoStopMinutes = getAutoStopMinutes();
-        if (SystemClock.elapsedRealtime() - startedAtElapsed >= minutesToMillis(autoStopMinutes)) {
+        if (SystemClock.elapsedRealtime() - startedAtElapsed >= RecordingPolicy.minutesToMillis(autoStopMinutes)) {
             stopSession("Finished " + autoStopMinutes + " minutes", true);
             return;
         }
@@ -375,11 +375,19 @@ public class RecordingService extends Service {
                         if (sampleTimeUs < 0) {
                             sampleTimeUs = lastSampleTimeUs;
                         }
+                        int extractorFlags = extractor.getSampleFlags();
+                        int codecFlags = 0;
+                        if ((extractorFlags & MediaExtractor.SAMPLE_FLAG_SYNC) != 0) {
+                            codecFlags |= MediaCodec.BUFFER_FLAG_KEY_FRAME;
+                        }
+                        if ((extractorFlags & MediaExtractor.SAMPLE_FLAG_PARTIAL_FRAME) != 0) {
+                            codecFlags |= MediaCodec.BUFFER_FLAG_PARTIAL_FRAME;
+                        }
                         bufferInfo.set(
                                 0,
                                 sampleSize,
                                 nextPresentationTimeUs + sampleTimeUs,
-                                extractor.getSampleFlags()
+                                codecFlags
                         );
                         muxer.writeSampleData(outputTrackIndex, buffer, bufferInfo);
                         lastSampleTimeUs = sampleTimeUs;
@@ -448,7 +456,7 @@ public class RecordingService extends Service {
         PowerManager powerManager = (PowerManager) getSystemService(Context.POWER_SERVICE);
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "RecorderLong:recording");
         wakeLock.setReferenceCounted(false);
-        wakeLock.acquire(minutesToMillis(getAutoStopMinutes()) + SEGMENT_MS);
+        wakeLock.acquire(RecordingPolicy.minutesToMillis(getAutoStopMinutes()) + SEGMENT_MS);
     }
 
     private void releaseWakeLock() {
@@ -476,9 +484,28 @@ public class RecordingService extends Service {
         }
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager != null && manager.isNotificationPolicyAccessGranted()) {
-            manager.setInterruptionFilter(previousInterruptionFilter);
+            restoreInterruptionFilter(manager, previousInterruptionFilter);
         }
         previousInterruptionFilter = -1;
+    }
+
+    private void restoreInterruptionFilter(NotificationManager manager, int filter) {
+        switch (filter) {
+            case NotificationManager.INTERRUPTION_FILTER_NONE:
+                manager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_NONE);
+                break;
+            case NotificationManager.INTERRUPTION_FILTER_PRIORITY:
+                manager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_PRIORITY);
+                break;
+            case NotificationManager.INTERRUPTION_FILTER_ALARMS:
+                manager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALARMS);
+                break;
+            case NotificationManager.INTERRUPTION_FILTER_ALL:
+                manager.setInterruptionFilter(NotificationManager.INTERRUPTION_FILTER_ALL);
+                break;
+            default:
+                break;
+        }
     }
 
     @SuppressWarnings("deprecation")
@@ -579,11 +606,7 @@ public class RecordingService extends Service {
 
     private int getAutoStopMinutes() {
         int minutes = settings().getInt(KEY_AUTO_STOP_MINUTES, DEFAULT_AUTO_STOP_MINUTES);
-        return Math.max(MIN_AUTO_STOP_MINUTES, Math.min(MAX_AUTO_STOP_MINUTES, minutes));
-    }
-
-    private long minutesToMillis(int minutes) {
-        return minutes * 60L * 1000L;
+        return RecordingPolicy.clampAutoStopMinutes(minutes);
     }
 
     private String currentPath() {
