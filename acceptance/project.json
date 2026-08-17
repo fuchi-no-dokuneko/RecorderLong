@@ -1,0 +1,9 @@
+{
+  "repository": "RecorderLong",
+  "platform": "android",
+  "appPackage": "dev.recorderlong",
+  "mainActivity": ".MainActivity",
+  "serviceClass": ".RecordingService",
+  "stopServiceAction": "dev.recorderlong.STOP",
+  "timeoutSeconds": 90
+}

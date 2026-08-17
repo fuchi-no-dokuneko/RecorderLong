@@ -11,3 +11,4 @@ captures/
 .rescued_parts/
 __pycache__/
 *.pyc
+acceptance/node_modules/
