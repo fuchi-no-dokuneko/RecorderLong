@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -25,6 +25,11 @@ jobs:
         run: chmod +x ./gradlew
       - name: Run unit coverage, lint, and build
         run: ./gradlew :app:createDebugUnitTestCoverageReport :app:lintDebug :app:assembleDebug --stacktrace
+      - name: Run SonarQube Cloud analysis
+        if: vars.SONARQUBE_CLOUD_ENABLED == 'true'
+        uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6.0.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       - name: Summarize reports
         if: always()
         run: python3 .github/scripts/summarize-android-reports.py
@@ -54,7 +59,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -67,13 +72,13 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - name: Run instrumentation UAT with coverage
-        uses: ReactiveCircus/android-emulator-runner@v2
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: 35
           arch: x86_64
           profile: pixel_6
           disable-animations: true
-          script: ./gradlew :app:createDebugAndroidTestCoverageReport --stacktrace
+          script: bash .github/scripts/run-android-uat.sh
       - name: Summarize reports
         if: always()
         run: python3 .github/scripts/summarize-android-reports.py
@@ -86,5 +91,6 @@ jobs:
             app/build/outputs/androidTest-results/
             app/build/reports/androidTests/
             app/build/reports/coverage/androidTest/
+            build/reports/android-uat.log
             build/reports/ci-summary.md
           if-no-files-found: warn
