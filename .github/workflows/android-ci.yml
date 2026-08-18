@@ -25,11 +25,6 @@ jobs:
         run: chmod +x ./gradlew
       - name: Run unit coverage, lint, and build
         run: ./gradlew :app:createDebugUnitTestCoverageReport :app:lintDebug :app:assembleDebug --stacktrace
-      - name: Run SonarQube Cloud analysis
-        if: vars.SONARQUBE_CLOUD_ENABLED == 'true'
-        uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6.0.0
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       - name: Summarize reports
         if: always()
         run: python3 .github/scripts/summarize-android-reports.py
@@ -43,6 +38,7 @@ jobs:
             app/build/reports/tests/
             app/build/reports/coverage/test/
             app/build/reports/lint-results-debug.*
+            app/build/intermediates/javac/debug/compileDebugJavaWithJavac/classes/
             build/reports/ci-summary.md
           if-no-files-found: warn
       - name: Upload debug APK
@@ -94,3 +90,40 @@ jobs:
             build/reports/android-uat.log
             build/reports/ci-summary.md
           if-no-files-found: warn
+
+  sonar:
+    name: SonarQube Cloud coverage
+    needs: [unit, uat]
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Restore unit coverage and compiled classes
+        uses: actions/download-artifact@v4
+        with:
+          name: android-unit-reports
+          path: .
+      - name: Restore instrumentation coverage
+        uses: actions/download-artifact@v4
+        with:
+          name: android-uat-reports
+          path: .
+      - name: Verify SonarQube input reports
+        run: |
+          test -s app/build/reports/coverage/test/debug/report.xml
+          test -s app/build/reports/coverage/androidTest/debug/connected/report.xml
+          test -d app/build/intermediates/javac/debug/compileDebugJavaWithJavac/classes
+      - name: Require SonarQube Cloud token
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          if [ -z "$SONAR_TOKEN" ]; then
+            echo "::error::Missing SONAR_TOKEN repository secret; coverage cannot be published."
+            exit 1
+          fi
+      - name: Run SonarQube Cloud analysis
+        uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6.0.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
