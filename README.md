@@ -82,3 +82,15 @@ do not upload audio.
 ## Credits
 
 See [CREDITS.md](CREDITS.md) for Android, FFmpeg, DeepFilterNet, and NumPy attribution.
+# Release signing
+
+Release tasks require all four Gradle signing properties and fail before
+building when any value or the keystore is missing. GitHub release CI also
+requires the public `ANDROID_CERT_SHA256` repository variable, verifies the APK
+with `apksigner`, verifies the AAB with `jarsigner`, and publishes the recorded
+certificate digest beside the artifacts. Obtain the expected digest from a
+reviewed keystore with:
+
+```bash
+keytool -list -v -keystore recorderlong-release.keystore -alias recorderlong | grep 'SHA256:'
+```

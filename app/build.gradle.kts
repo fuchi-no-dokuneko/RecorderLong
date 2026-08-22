@@ -2,11 +2,15 @@ plugins {
     id("com.android.application")
 }
 
+val applicationProject = project
+val releaseStoreFileProvider = providers.gradleProperty("RELEASE_STORE_FILE")
+val releaseStorePasswordProvider = providers.gradleProperty("RELEASE_STORE_PASSWORD")
+val releaseKeyAliasProvider = providers.gradleProperty("RELEASE_KEY_ALIAS")
+val releaseKeyPasswordProvider = providers.gradleProperty("RELEASE_KEY_PASSWORD")
+
 android {
     namespace = "dev.recorderlong"
     compileSdk = 36
-    val releaseStoreFileProvider = providers.gradleProperty("RELEASE_STORE_FILE")
-
     defaultConfig {
         applicationId = "dev.recorderlong"
         minSdk = 26
@@ -26,9 +30,9 @@ android {
             val releaseStoreFile = releaseStoreFileProvider.orNull
             if (!releaseStoreFile.isNullOrBlank()) {
                 storeFile = file(releaseStoreFile)
-                storePassword = providers.gradleProperty("RELEASE_STORE_PASSWORD").orNull
-                keyAlias = providers.gradleProperty("RELEASE_KEY_ALIAS").orNull
-                keyPassword = providers.gradleProperty("RELEASE_KEY_PASSWORD").orNull
+                storePassword = releaseStorePasswordProvider.orNull
+                keyAlias = releaseKeyAliasProvider.orNull
+                keyPassword = releaseKeyPasswordProvider.orNull
             }
         }
     }
@@ -43,6 +47,26 @@ android {
                 signingConfig = signingConfigs.getByName("release")
             }
         }
+    }
+}
+
+gradle.taskGraph.whenReady {
+    val releaseRequested = allTasks.any { task ->
+        task.project == applicationProject && task.name.contains("Release", ignoreCase = true)
+    }
+    if (releaseRequested) {
+        val signingValues = mapOf(
+            "RELEASE_STORE_FILE" to releaseStoreFileProvider.orNull,
+            "RELEASE_STORE_PASSWORD" to releaseStorePasswordProvider.orNull,
+            "RELEASE_KEY_ALIAS" to releaseKeyAliasProvider.orNull,
+            "RELEASE_KEY_PASSWORD" to releaseKeyPasswordProvider.orNull,
+        )
+        val missing = signingValues.filterValues { it.isNullOrBlank() }.keys
+        if (missing.isNotEmpty()) {
+            throw GradleException("Release signing properties are required: ${missing.sorted().joinToString()}")
+        }
+        val storeFile = file(requireNotNull(signingValues.getValue("RELEASE_STORE_FILE")))
+        if (!storeFile.isFile) throw GradleException("Release keystore does not exist: $storeFile")
     }
 }
 
