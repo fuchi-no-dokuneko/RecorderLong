@@ -20,16 +20,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
           distribution: temurin
           java-version: "17"
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
       - name: Ensure Gradle wrapper is executable
         run: chmod +x ./gradlew
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
+        uses: github/codeql-action/init@4c0873ef8656cb3c50b3f42fb63bc1ade0cfa827 # v4
         with:
           languages: java-kotlin
           build-mode: manual
@@ -37,6 +39,6 @@ jobs:
       - name: Build for analysis
         run: ./gradlew :app:assembleDebug --stacktrace
       - name: Analyze
-        uses: github/codeql-action/analyze@v4
+        uses: github/codeql-action/analyze@4c0873ef8656cb3c50b3f42fb63bc1ade0cfa827 # v4
         with:
           category: /language:java-kotlin
