@@ -39,6 +39,8 @@ public class MainActivity extends Activity {
     private TextView permissionText;
     private Button startButton;
     private Button stopButton;
+    private Button recoverButton;
+    private Button keepPartsButton;
     private EditText autoStopMinutesInput;
     private CheckBox silentNotificationBox;
     private CheckBox dndBox;
@@ -111,6 +113,14 @@ public class MainActivity extends Activity {
         stopButton = button("Stop");
         stopButton.setOnClickListener(view -> stopRecording());
         content.addView(stopButton, fullWidth());
+
+        recoverButton = button("Recover interrupted session");
+        recoverButton.setOnClickListener(view -> sendRecoveryAction(RecordingService.ACTION_RECOVER));
+        content.addView(recoverButton, fullWidth());
+
+        keepPartsButton = button("Keep parts without merging");
+        keepPartsButton.setOnClickListener(view -> sendRecoveryAction(RecordingService.ACTION_KEEP_PARTS));
+        content.addView(keepPartsButton, fullWidth());
 
         TextView settingsTitle = text("Settings", 18, 0xffffffff);
         settingsTitle.setPadding(0, dp(22), 0, dp(4));
@@ -237,6 +247,16 @@ public class MainActivity extends Activity {
         startService(intent);
     }
 
+    private void sendRecoveryAction(String action) {
+        Intent intent = new Intent(this, RecordingService.class);
+        intent.setAction(action);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent);
+        } else {
+            startService(intent);
+        }
+    }
+
     private boolean hasRequiredPermissions() {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             return false;
@@ -277,6 +297,7 @@ public class MainActivity extends Activity {
         silentNotificationBox.setChecked(preferences.getBoolean(RecordingService.KEY_SILENT_NOTIFICATION, false));
         dndBox.setChecked(preferences.getBoolean(RecordingService.KEY_DND_WHILE_RECORDING, false));
         rejectCallsBox.setChecked(preferences.getBoolean(RecordingService.KEY_REJECT_CALLS_WHILE_RECORDING, false));
+        refreshRecoveryControls();
         updatePermissionText();
     }
 
@@ -376,10 +397,20 @@ public class MainActivity extends Activity {
     }
 
     private void updateStatus(String status, String path, boolean recording) {
+        boolean recoveryAvailable = RecordingSessionJournal.load(preferences).active;
         statusText.setText(status == null || status.isEmpty() ? "Idle" : status);
         pathText.setText(path == null || path.isEmpty() ? "Download/RecorderLong" : path);
-        startButton.setEnabled(!recording);
+        startButton.setEnabled(!recording && !recoveryAvailable);
         stopButton.setEnabled(recording);
+        recoverButton.setVisibility(recoveryAvailable ? View.VISIBLE : View.GONE);
+        keepPartsButton.setVisibility(recoveryAvailable ? View.VISIBLE : View.GONE);
+    }
+
+    private void refreshRecoveryControls() {
+        boolean available = RecordingSessionJournal.load(preferences).active;
+        if (recoverButton != null) recoverButton.setVisibility(available ? View.VISIBLE : View.GONE);
+        if (keepPartsButton != null) keepPartsButton.setVisibility(available ? View.VISIBLE : View.GONE);
+        if (startButton != null && available) startButton.setEnabled(false);
     }
 
     private void updatePermissionText() {

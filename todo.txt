@@ -1,0 +1,3 @@
+繁中：恢復、刪除及媒體驗證 MVP 已整合；裝置測試與錯誤介面細化待完成。
+
+English: Recovery, deletion, and media-validation MVPs are integrated; device tests and error UI refinement remain.

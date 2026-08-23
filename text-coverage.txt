@@ -1,0 +1,3 @@
+session-journal: Private preference persistence and recovery parsing; Android preferences are instrumented, not mocked.
+recording-service: Real MediaStore, recorder, extractor, and muxer on emulator or device; no media mocks.
+offline-rescue: Real temporary media and ffmpeg processes; Android storage is not involved.
