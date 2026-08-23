@@ -33,7 +33,9 @@ jobs:
       - name: Run real ffmpeg rescue tests with Python coverage
         run: python3 .github/scripts/run-python-coverage.py
       - name: Verify immutable security workflows
-        run: python3 .github/scripts/verify-workflow-pins.py
+        run: |
+          python3 .github/scripts/verify-workflow-pins.py
+          python3 -m unittest discover -s .github/scripts/tests -p 'test_*.py'
       - name: Summarize reports
         if: always()
         run: python3 .github/scripts/summarize-android-reports.py
