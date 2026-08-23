@@ -11,19 +11,21 @@ import java.util.Collections;
 import java.util.List;
 
 final class RecordingSessionJournal {
-    private static final String KEY = "recording_session_journal_v1";
+    static final String KEY = "recording_session_journal_v2";
 
     static final class Entry {
         final String uri;
         final String filePath;
         final String name;
         final String displayPath;
+        final boolean complete;
 
-        Entry(String uri, String filePath, String name, String displayPath) {
+        Entry(String uri, String filePath, String name, String displayPath, boolean complete) {
             this.uri = uri;
             this.filePath = filePath;
             this.name = name;
             this.displayPath = displayPath;
+            this.complete = complete;
         }
     }
 
@@ -66,7 +68,7 @@ final class RecordingSessionJournal {
         }
         try {
             JSONObject root = new JSONObject(raw);
-            if (root.optInt("schemaVersion", 0) != 1) {
+            if (root.optInt("schemaVersion", 0) != 2) {
                 return new Snapshot(true, false, "", "", Collections.emptyList());
             }
             List<Entry> entries = new ArrayList<>();
@@ -78,7 +80,8 @@ final class RecordingSessionJournal {
                             item.optString("uri", ""),
                             item.optString("filePath", ""),
                             item.optString("name", ""),
-                            item.optString("displayPath", "")
+                            item.optString("displayPath", ""),
+                            item.optBoolean("complete", false)
                     ));
                 }
             }
@@ -101,7 +104,7 @@ final class RecordingSessionJournal {
     private static boolean save(SharedPreferences preferences, Snapshot snapshot) {
         try {
             JSONObject root = new JSONObject();
-            root.put("schemaVersion", 1);
+            root.put("schemaVersion", 2);
             root.put("active", snapshot.active);
             root.put("sessionName", snapshot.sessionName);
             root.put("sessionPath", snapshot.sessionPath);
@@ -112,6 +115,7 @@ final class RecordingSessionJournal {
                 item.put("filePath", entry.filePath);
                 item.put("name", entry.name);
                 item.put("displayPath", entry.displayPath);
+                item.put("complete", entry.complete);
                 segments.put(item);
             }
             root.put("segments", segments);

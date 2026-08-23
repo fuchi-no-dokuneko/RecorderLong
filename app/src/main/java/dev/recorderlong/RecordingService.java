@@ -191,6 +191,9 @@ public class RecordingService extends Service {
 
         try {
             currentTarget = createOutputTarget(fileName);
+            if (!persistSessionState()) {
+                throw new IOException("Cannot persist current segment journal");
+            }
             recorder = createRecorder();
             recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
             recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
@@ -343,13 +346,20 @@ public class RecordingService extends Service {
     }
 
     private void persistCompletedSegments() {
-        List<RecordingSessionJournal.Entry> entries = new ArrayList<>();
-        for (OutputTarget target : completedSegments) {
-            entries.add(target.toJournalEntry());
-        }
-        if (!RecordingSessionJournal.saveSegments(settings(), sessionName, sessionPath, entries)) {
+        if (!persistSessionState()) {
             sendStatus("Recovery journal update failed; keep recorded parts", currentPath(), recording);
         }
+    }
+
+    private boolean persistSessionState() {
+        List<RecordingSessionJournal.Entry> entries = new ArrayList<>();
+        for (OutputTarget target : completedSegments) {
+            entries.add(target.toJournalEntry(true));
+        }
+        if (currentTarget != null) {
+            entries.add(currentTarget.toJournalEntry(false));
+        }
+        return RecordingSessionJournal.saveSegments(settings(), sessionName, sessionPath, entries);
     }
 
     private void recoverInterruptedSession() {
@@ -388,12 +398,22 @@ public class RecordingService extends Service {
             return;
         }
 
+        List<OutputTarget> validSegments = new ArrayList<>();
         List<OutputTarget> retained = new ArrayList<>();
-        int totalHours = (completedSegments.size() + SEGMENTS_PER_HOUR_FILE - 1) / SEGMENTS_PER_HOUR_FILE;
+        for (OutputTarget source : completedSegments) {
+            if (source.hasReadableAudio(this)) {
+                validSegments.add(source);
+            } else {
+                retained.add(source);
+                sendStatus("Invalid or partial part retained for offline rescue", source.displayPath, false);
+            }
+        }
+
+        int totalHours = (validSegments.size() + SEGMENTS_PER_HOUR_FILE - 1) / SEGMENTS_PER_HOUR_FILE;
         for (int hour = 0; hour < totalHours; hour++) {
             int from = hour * SEGMENTS_PER_HOUR_FILE;
-            int to = Math.min(completedSegments.size(), from + SEGMENTS_PER_HOUR_FILE);
-            List<OutputTarget> group = new ArrayList<>(completedSegments.subList(from, to));
+            int to = Math.min(validSegments.size(), from + SEGMENTS_PER_HOUR_FILE);
+            List<OutputTarget> group = new ArrayList<>(validSegments.subList(from, to));
             sendStatus(
                     "Creating hour file " + (hour + 1) + "/" + totalHours,
                     sessionPath == null ? DOWNLOAD_ROOT : sessionPath,
@@ -441,9 +461,6 @@ public class RecordingService extends Service {
             MediaCodec.BufferInfo bufferInfo = new MediaCodec.BufferInfo();
 
             for (OutputTarget source : sources) {
-                if (!source.hasReadableAudio(this)) {
-                    throw new IOException("Invalid audio part retained: " + source.displayPath);
-                }
                 MediaExtractor extractor = new MediaExtractor();
                 try {
                     source.setExtractorDataSource(this, extractor);
@@ -775,12 +792,13 @@ public class RecordingService extends Service {
             return new OutputTarget(uri, null, file, entry.name, entry.displayPath);
         }
 
-        RecordingSessionJournal.Entry toJournalEntry() {
+        RecordingSessionJournal.Entry toJournalEntry(boolean complete) {
             return new RecordingSessionJournal.Entry(
                     uri == null ? "" : uri.toString(),
                     file == null ? "" : file.getAbsolutePath(),
                     name,
-                    displayPath
+                    displayPath,
+                    complete
             );
         }
 
