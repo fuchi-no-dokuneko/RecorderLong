@@ -1,0 +1,3 @@
+繁中：本批程式已完成；本機無模擬器映像，裝置證據由 CI 強制產生。
+
+English: This batch is implemented; CI requires device evidence because no emulator image is installed locally.

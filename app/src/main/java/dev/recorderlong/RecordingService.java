@@ -41,6 +41,8 @@ import java.util.Locale;
 public class RecordingService extends Service {
     public static final String ACTION_START = "dev.recorderlong.START";
     public static final String ACTION_STOP = "dev.recorderlong.STOP";
+    public static final String ACTION_RECOVER = "dev.recorderlong.RECOVER";
+    public static final String ACTION_KEEP_PARTS = "dev.recorderlong.KEEP_PARTS";
     public static final String ACTION_STATUS = "dev.recorderlong.STATUS";
     public static final String EXTRA_STATUS = "status";
     public static final String EXTRA_PATH = "path";
@@ -95,8 +97,32 @@ public class RecordingService extends Service {
             return START_NOT_STICKY;
         }
 
+        if (ACTION_RECOVER.equals(action)) {
+            startForegroundCompat(buildNotification("Recovering", DOWNLOAD_ROOT));
+            recoverInterruptedSession();
+            return START_NOT_STICKY;
+        }
+
+        if (ACTION_KEEP_PARTS.equals(action)) {
+            startForegroundCompat(buildNotification("Keeping recorded parts", DOWNLOAD_ROOT));
+            keepInterruptedParts();
+            return START_NOT_STICKY;
+        }
+
         boolean shouldStart = ACTION_START.equals(action) || (action == null && isRecordingRequested());
         if (shouldStart && !recording) {
+            RecordingSessionJournal.Snapshot interrupted = RecordingSessionJournal.load(settings());
+            if (interrupted.active) {
+                setRecordingRequested(false);
+                sendStatus(
+                        interrupted.readable ? "Interrupted session needs a recovery choice" : "Recovery journal is unreadable; recorded files were kept",
+                        interrupted.sessionPath.isEmpty() ? DOWNLOAD_ROOT : interrupted.sessionPath,
+                        false
+                );
+                stopForegroundCompat();
+                stopSelf();
+                return START_NOT_STICKY;
+            }
             setRecordingRequested(true);
             startForegroundCompat(buildNotification("Starting", DOWNLOAD_ROOT));
             startSession();
@@ -140,6 +166,14 @@ public class RecordingService extends Service {
         sessionName = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date());
         sessionPath = DOWNLOAD_ROOT + "/session-" + sessionName;
 
+        if (!RecordingSessionJournal.start(settings(), sessionName, sessionPath)) {
+            sendStatus("Record failed: cannot persist recovery journal", sessionPath, false);
+            setRecordingRequested(false);
+            stopForegroundCompat();
+            stopSelf();
+            return;
+        }
+
         acquireWakeLock();
         applyDndIfEnabled();
         startNextSegment();
@@ -157,6 +191,9 @@ public class RecordingService extends Service {
 
         try {
             currentTarget = createOutputTarget(fileName);
+            if (!persistSessionState()) {
+                throw new IOException("Cannot persist current segment journal");
+            }
             recorder = createRecorder();
             recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
             recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
@@ -213,7 +250,7 @@ public class RecordingService extends Service {
                 target.finish(this);
                 return target;
             } else {
-                target.discard(this);
+                reportDeletion(target.discard(this), target.displayPath);
             }
         }
         return null;
@@ -223,7 +260,7 @@ public class RecordingService extends Service {
         OutputTarget target = currentTarget;
         currentTarget = null;
         if (target != null) {
-            target.discard(this);
+            reportDeletion(target.discard(this), target.displayPath);
         }
     }
 
@@ -304,7 +341,56 @@ public class RecordingService extends Service {
     private void rememberFinishedSegment(OutputTarget target) {
         if (target != null) {
             completedSegments.add(target);
+            persistCompletedSegments();
         }
+    }
+
+    private void persistCompletedSegments() {
+        if (!persistSessionState()) {
+            sendStatus("Recovery journal update failed; keep recorded parts", currentPath(), recording);
+        }
+    }
+
+    private boolean persistSessionState() {
+        List<RecordingSessionJournal.Entry> entries = new ArrayList<>();
+        for (OutputTarget target : completedSegments) {
+            entries.add(target.toJournalEntry(true));
+        }
+        if (currentTarget != null) {
+            entries.add(currentTarget.toJournalEntry(false));
+        }
+        return RecordingSessionJournal.saveSegments(settings(), sessionName, sessionPath, entries);
+    }
+
+    private void recoverInterruptedSession() {
+        RecordingSessionJournal.Snapshot snapshot = RecordingSessionJournal.load(settings());
+        if (!snapshot.active || !snapshot.readable) {
+            sendStatus("Recovery unavailable; recorded files were kept", DOWNLOAD_ROOT, false);
+            stopForegroundCompat();
+            stopSelf();
+            return;
+        }
+        sessionName = snapshot.sessionName;
+        sessionPath = snapshot.sessionPath;
+        completedSegments.clear();
+        for (RecordingSessionJournal.Entry entry : snapshot.segments) {
+            completedSegments.add(OutputTarget.fromJournalEntry(entry));
+        }
+        createHourlyFilesIfNeeded();
+        stopForegroundCompat();
+        stopSelf();
+    }
+
+    private void keepInterruptedParts() {
+        RecordingSessionJournal.Snapshot snapshot = RecordingSessionJournal.load(settings());
+        String path = snapshot.sessionPath.isEmpty() ? DOWNLOAD_ROOT : snapshot.sessionPath;
+        if (RecordingSessionJournal.complete(settings())) {
+            sendStatus("Recorded parts kept without merging", path, false);
+        } else {
+            sendStatus("Could not dismiss recovery journal; recorded parts kept", path, false);
+        }
+        stopForegroundCompat();
+        stopSelf();
     }
 
     private void createHourlyFilesIfNeeded() {
@@ -312,24 +398,52 @@ public class RecordingService extends Service {
             return;
         }
 
-        int totalHours = (completedSegments.size() + SEGMENTS_PER_HOUR_FILE - 1) / SEGMENTS_PER_HOUR_FILE;
+        List<OutputTarget> validSegments = new ArrayList<>();
+        List<OutputTarget> retained = new ArrayList<>();
+        for (OutputTarget source : completedSegments) {
+            if (source.hasReadableAudio(this)) {
+                validSegments.add(source);
+            } else {
+                retained.add(source);
+                sendStatus("Invalid or partial part retained for offline rescue", source.displayPath, false);
+            }
+        }
+
+        int totalHours = (validSegments.size() + SEGMENTS_PER_HOUR_FILE - 1) / SEGMENTS_PER_HOUR_FILE;
         for (int hour = 0; hour < totalHours; hour++) {
             int from = hour * SEGMENTS_PER_HOUR_FILE;
-            int to = Math.min(completedSegments.size(), from + SEGMENTS_PER_HOUR_FILE);
-            List<OutputTarget> group = completedSegments.subList(from, to);
+            int to = Math.min(validSegments.size(), from + SEGMENTS_PER_HOUR_FILE);
+            List<OutputTarget> group = new ArrayList<>(validSegments.subList(from, to));
             sendStatus(
                     "Creating hour file " + (hour + 1) + "/" + totalHours,
                     sessionPath == null ? DOWNLOAD_ROOT : sessionPath,
                     false
             );
-            createHourlyFile(group, hour + 1);
+            if (createHourlyFile(group, hour + 1)) {
+                for (OutputTarget source : group) {
+                    DeletionResult deletion = source.delete(this);
+                    if (!deletion.deleted) {
+                        retained.add(source);
+                        reportDeletion(deletion, source.displayPath);
+                    }
+                }
+            } else {
+                retained.addAll(group);
+            }
         }
         completedSegments.clear();
+        completedSegments.addAll(retained);
+        if (completedSegments.isEmpty()) {
+            RecordingSessionJournal.complete(settings());
+        } else {
+            persistCompletedSegments();
+            sendStatus("Some source parts were kept for retry", sessionPath, false);
+        }
     }
 
-    private void createHourlyFile(List<OutputTarget> sources, int hourNumber) {
+    private boolean createHourlyFile(List<OutputTarget> sources, int hourNumber) {
         if (sources.isEmpty()) {
-            return;
+            return false;
         }
 
         OutputTarget output = null;
@@ -410,11 +524,16 @@ public class RecordingService extends Service {
             muxer.stop();
             muxer.release();
             muxer = null;
+            if (!output.hasReadableAudio(this)) {
+                throw new IOException("Final hour file did not pass audio probing");
+            }
             output.finish(this);
             outputFinished = true;
             sendStatus("Created hour file " + hourNumber, output.displayPath, false);
+            return true;
         } catch (IOException | RuntimeException e) {
             sendStatus("Hour concat failed: " + e.getMessage(), sessionPath == null ? DOWNLOAD_ROOT : sessionPath, false);
+            return false;
         } finally {
             if (muxer != null) {
                 try {
@@ -423,8 +542,14 @@ public class RecordingService extends Service {
                 }
             }
             if (output != null && !outputFinished) {
-                output.discard(this);
+                reportDeletion(output.discard(this), output.displayPath);
             }
+        }
+    }
+
+    private void reportDeletion(DeletionResult result, String path) {
+        if (!result.deleted) {
+            sendStatus("Delete failed; retained for retry: " + result.detail, path, false);
         }
     }
 
@@ -628,6 +753,16 @@ public class RecordingService extends Service {
         sendBroadcast(intent);
     }
 
+    private static final class DeletionResult {
+        final boolean deleted;
+        final String detail;
+
+        DeletionResult(boolean deleted, String detail) {
+            this.deleted = deleted;
+            this.detail = detail;
+        }
+    }
+
     private static final class OutputTarget {
         private final Uri uri;
         private final ParcelFileDescriptor descriptor;
@@ -649,6 +784,22 @@ public class RecordingService extends Service {
 
         static OutputTarget forFile(File file, String name) {
             return new OutputTarget(null, null, file, name, file.getAbsolutePath());
+        }
+
+        static OutputTarget fromJournalEntry(RecordingSessionJournal.Entry entry) {
+            Uri uri = entry.uri.isEmpty() ? null : Uri.parse(entry.uri);
+            File file = entry.filePath.isEmpty() ? null : new File(entry.filePath);
+            return new OutputTarget(uri, null, file, entry.name, entry.displayPath);
+        }
+
+        RecordingSessionJournal.Entry toJournalEntry(boolean complete) {
+            return new RecordingSessionJournal.Entry(
+                    uri == null ? "" : uri.toString(),
+                    file == null ? "" : file.getAbsolutePath(),
+                    name,
+                    displayPath,
+                    complete
+            );
         }
 
         void applyTo(MediaRecorder recorder) {
@@ -675,6 +826,26 @@ public class RecordingService extends Service {
             }
         }
 
+        boolean hasReadableAudio(Context context) {
+            MediaExtractor extractor = new MediaExtractor();
+            try {
+                setExtractorDataSource(context, extractor);
+                for (int index = 0; index < extractor.getTrackCount(); index++) {
+                    MediaFormat format = extractor.getTrackFormat(index);
+                    String mime = format.getString(MediaFormat.KEY_MIME);
+                    if (mime != null && mime.startsWith("audio/")) {
+                        extractor.selectTrack(index);
+                        return extractor.readSampleData(ByteBuffer.allocate(32), 0) > 0;
+                    }
+                }
+                return false;
+            } catch (IOException | RuntimeException error) {
+                return false;
+            } finally {
+                extractor.release();
+            }
+        }
+
         void finish(Context context) {
             closeDescriptor();
             if (uri != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -687,15 +858,26 @@ public class RecordingService extends Service {
             }
         }
 
-        void discard(Context context) {
+        DeletionResult discard(Context context) {
+            return delete(context);
+        }
+
+        DeletionResult delete(Context context) {
             closeDescriptor();
             ContentResolver resolver = context.getContentResolver();
             if (uri != null) {
-                resolver.delete(uri, null, null);
+                try {
+                    int rows = resolver.delete(uri, null, null);
+                    return new DeletionResult(rows > 0, rows > 0 ? "deleted" : "MediaStore retained the item");
+                } catch (RuntimeException error) {
+                    return new DeletionResult(false, error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage());
+                }
             }
-            if (file != null && file.length() == 0L) {
-                file.delete();
+            if (file == null || !file.exists()) {
+                return new DeletionResult(true, "already absent");
             }
+            boolean deleted = file.delete();
+            return new DeletionResult(deleted && !file.exists(), deleted ? "deleted" : "filesystem retained the file");
         }
 
         private void closeDescriptor() {

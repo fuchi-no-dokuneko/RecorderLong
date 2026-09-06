@@ -1,0 +1,5 @@
+session-journal: Private preference persistence and recovery parsing; Android preferences are instrumented, not mocked.
+recording-service: Real MediaStore, recorder, extractor, and muxer on emulator or device; no media mocks.
+offline-rescue: Real temporary media and ffmpeg processes; Android storage is not involved.
+python-tools: Standard-library trace measures every maintained Python tool; optional denoise dependencies are not mocked.
+coverage-gate: Real JaCoCo and Python XML are merged by source line; device, media, security, and signing evidence are required.

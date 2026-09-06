@@ -10,7 +10,73 @@ permissions:
   contents: write
 
 jobs:
+  quality:
+    name: Device, media, coverage, and security gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+      - name: Install ffmpeg
+        run: |
+          timeout 60s sudo apt-get -o Acquire::ForceIPv4=true update
+          timeout 60s sudo apt-get -o Acquire::ForceIPv4=true install -y --no-install-recommends ffmpeg
+      - name: Run unit and real media evidence
+        run: |
+          chmod +x ./gradlew
+          ./gradlew :app:createDebugUnitTestCoverageReport :app:lintDebug --stacktrace
+          mkdir -p build/reports
+          ./gradlew :app:dependencies > build/reports/android-dependencies.txt
+          python3 .github/scripts/run-python-coverage.py
+          python3 .github/scripts/verify-workflow-pins.py
+          python3 -m unittest discover -s .github/scripts/tests -p 'test_*.py'
+      - name: Enable KVM access
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Run required device UAT and coverage
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: bash .github/scripts/run-android-uat.sh
+      - name: Enforce merged maintained-source coverage and evidence
+        run: |
+          python3 .github/scripts/merge-coverage.py \
+            --jacoco app/build/reports/coverage/test/debug/report.xml \
+            --jacoco app/build/reports/coverage/androidTest/debug/connected/report.xml \
+            --python build/reports/python/coverage.xml \
+            --device-report app/build/reports/coverage/androidTest/debug/connected/report.xml \
+            --media-evidence build/reports/python/media-evidence.json \
+            --security-evidence build/reports/security-evidence.json \
+            --threshold 20
+      - name: Upload release-gate evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: recorderlong-release-gates-${{ github.run_id }}
+          path: |
+            app/build/test-results/
+            app/build/outputs/androidTest-results/
+            app/build/reports/coverage/
+            app/build/reports/lint-results-debug.*
+            build/reports/python/
+            build/reports/security-evidence.json
+            build/reports/android-dependencies.txt
+            build/reports/merged-coverage.json
+          if-no-files-found: error
+
   release:
+    needs: quality
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:

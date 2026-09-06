@@ -2,7 +2,7 @@ name: Android CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "tickets/**"]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -15,22 +15,37 @@ jobs:
     name: Unit, lint, build, and coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-java@v5
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
           distribution: temurin
           java-version: "17"
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+      - name: Install ffmpeg
+        run: |
+          timeout 60s sudo apt-get -o Acquire::ForceIPv4=true update
+          timeout 60s sudo apt-get -o Acquire::ForceIPv4=true install -y --no-install-recommends ffmpeg
       - name: Ensure Gradle wrapper is executable
         run: chmod +x ./gradlew
       - name: Run unit coverage, lint, and build
-        run: ./gradlew :app:createDebugUnitTestCoverageReport :app:lintDebug :app:assembleDebug --stacktrace
+        run: |
+          mkdir -p build/reports
+          ./gradlew :app:createDebugUnitTestCoverageReport :app:lintDebug :app:assembleDebug --stacktrace
+          ./gradlew :app:dependencies > build/reports/android-dependencies.txt
+      - name: Run real ffmpeg rescue tests with Python coverage
+        run: python3 .github/scripts/run-python-coverage.py
+      - name: Verify immutable security workflows
+        run: |
+          python3 .github/scripts/verify-workflow-pins.py
+          python3 -m unittest discover -s .github/scripts/tests -p 'test_*.py'
       - name: Summarize reports
         if: always()
         run: python3 .github/scripts/summarize-android-reports.py
       - name: Upload unit, lint, and coverage reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: android-unit-reports
           path: |
@@ -39,10 +54,13 @@ jobs:
             app/build/reports/coverage/test/
             app/build/reports/lint-results-debug.*
             app/build/intermediates/javac/debug/compileDebugJavaWithJavac/classes/
+            build/reports/python/
+            build/reports/security-evidence.json
+            build/reports/android-dependencies.txt
             build/reports/ci-summary.md
           if-no-files-found: warn
       - name: Upload debug APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: recorderlong-debug-apk
           path: app/build/outputs/apk/debug/*.apk
@@ -54,12 +72,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-java@v5
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
         with:
           distribution: temurin
           java-version: "17"
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
       - name: Ensure Gradle wrapper is executable
         run: chmod +x ./gradlew
       - name: Enable KVM access
@@ -80,7 +100,7 @@ jobs:
         run: python3 .github/scripts/summarize-android-reports.py
       - name: Upload UAT and coverage reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: android-uat-reports
           path: |
@@ -91,22 +111,58 @@ jobs:
             build/reports/ci-summary.md
           if-no-files-found: warn
 
+  coverage-gate:
+    name: Merged 95 percent coverage gate
+    needs: [unit, uat]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Restore unit, Python, and security evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: android-unit-reports
+          path: .
+      - name: Restore device coverage evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: android-uat-reports
+          path: .
+      - name: Enforce merged maintained-source coverage and evidence
+        run: |
+          python3 .github/scripts/merge-coverage.py \
+            --jacoco app/build/reports/coverage/test/debug/report.xml \
+            --jacoco app/build/reports/coverage/androidTest/debug/connected/report.xml \
+            --python build/reports/python/coverage.xml \
+            --device-report app/build/reports/coverage/androidTest/debug/connected/report.xml \
+            --media-evidence build/reports/python/media-evidence.json \
+            --security-evidence build/reports/security-evidence.json \
+            --threshold 95
+      - name: Upload merged gate evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: recorderlong-merged-coverage
+          path: build/reports/merged-coverage.json
+          if-no-files-found: error
+
   sonar:
     name: SonarQube Cloud coverage
-    needs: [unit, uat]
+    needs: [unit, uat, coverage-gate]
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
       - name: Restore unit coverage and compiled classes
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: android-unit-reports
           path: .
       - name: Restore instrumentation coverage
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: android-uat-reports
           path: .
@@ -114,6 +170,8 @@ jobs:
         run: |
           test -s app/build/reports/coverage/test/debug/report.xml
           test -s app/build/reports/coverage/androidTest/debug/connected/report.xml
+          test -s build/reports/python/coverage.xml
+          test -s build/reports/python/media-evidence.json
           test -d app/build/intermediates/javac/debug/compileDebugJavaWithJavac/classes
       - name: Require SonarQube Cloud token
         env:
